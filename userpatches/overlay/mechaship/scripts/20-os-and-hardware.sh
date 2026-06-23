@@ -60,6 +60,12 @@ apt_install device-tree-compiler
 overlay_dts="/tmp/mechaship-rock5a-fan.dts"
 overlay_dtbo="/tmp/mechaship-rock5a-fan.dtbo"
 
+cleanup_device_tree_files() {
+	rm -f "${overlay_dts}" "${overlay_dtbo}"
+}
+
+trap cleanup_device_tree_files EXIT
+
 cat > "${overlay_dts}" <<'EOF'
 /dts-v1/;
 /plugin/;
@@ -68,8 +74,10 @@ cat > "${overlay_dts}" <<'EOF'
 	compatible = "rockchip,rk3588s";
 
 	fragment@0 {
-		target = <&pwm7>;
+		target = <&pwm15>;
 		__overlay__ {
+			pinctrl-names = "active";
+			pinctrl-0 = <&pwm15m3_pins>;
 			status = "okay";
 		};
 	};
@@ -78,7 +86,19 @@ cat > "${overlay_dts}" <<'EOF'
 		target = <&fan0>;
 		__overlay__ {
 			cooling-levels = <0 50 101 152 204 255>;
-			pwms = <&pwm7 0 10000 0>;
+			pwms = <&pwm15 0 10000 0>;
+		};
+	};
+
+	/* Six cooling levels have valid state indexes 0 through 5. */
+	fragment@2 {
+		target = <&soc_thermal>;
+		__overlay__ {
+			cooling-maps {
+				map5 {
+					cooling-device = <&fan0 5 5>;
+				};
+			};
 		};
 	};
 };
@@ -102,9 +122,9 @@ for dtb in "${rock5a_dtbs[@]}"; do
 	fi
 
 	fdtoverlay -i "${dtb}" -o "${patched}" "${overlay_dtbo}"
-	cat "${patched}" > "${dtb}"
-	rm -f "${patched}"
+	chmod --reference="${dtb}" "${patched}"
+	chown --reference="${dtb}" "${patched}"
+	touch --reference="${dtb}" "${patched}"
+	mv -f "${patched}" "${dtb}"
 	echo "Applied MechaShip Rock 5A cooling fan overlay to ${dtb}"
 done
-
-rm -f "${overlay_dts}" "${overlay_dtbo}"
