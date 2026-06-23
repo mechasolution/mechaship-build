@@ -8,6 +8,7 @@ import time
 import zlib
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -16,6 +17,26 @@ import serial
 from cobs import cobs
 
 import messages_pb2
+
+
+def read_ros_domain_id(
+    bashrc_path: Path = Path("/home/ubuntu/.bashrc"), default: int = 0
+) -> int:
+    try:
+        bashrc = bashrc_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return default
+
+    pattern = re.compile(
+        r'''^\s*(?:export\s+)?ROS_DOMAIN_ID\s*=\s*(?:"(\d+)"|'(\d+)'|(\d+))\s*(?:#.*)?$'''
+    )
+    domain_id = default
+    for line in bashrc.splitlines():
+        match = pattern.match(line)
+        if match:
+            domain_id = int(next(value for value in match.groups() if value is not None))
+
+    return domain_id
 
 
 class Framer:
@@ -322,17 +343,7 @@ class Dispatcher:
         elif which == "domain_id_info":
             di = msg.domain_id_info
             self.domain_id_mcu = di.id
-
-            result = subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    "source /home/ubuntu/ros2_ws/install/setup.bash && echo $ROS_DOMAIN_ID",
-                ],
-                stdout=subprocess.PIPE,
-                text=True,
-            )
-            self.domain_id_sbc = int(result.stdout.strip())
+            self.domain_id_sbc = read_ros_domain_id()
 
             return False, None
 
@@ -383,12 +394,12 @@ def main():
         current_time = time.time()
 
         while True:
-            (is_frame, is_left) = serialhd.fetch()
+            is_frame, is_left = serialhd.fetch()
             if is_left is False:
                 break
             if is_frame is True:
                 msg = framer.decode(serialhd.get_frame())
-                (is_res, msg) = dispatcher.process_rx(msg)
+                is_res, msg = dispatcher.process_rx(msg)
                 if is_res is True:
                     frame = framer.encode(msg)
                     serialhd.send(frame)

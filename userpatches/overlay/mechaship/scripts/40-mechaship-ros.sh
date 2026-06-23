@@ -7,11 +7,9 @@ install -D -m 0644 \
 	"/etc/udev/rules.d/${MECHASHIP_UDEV_RULE}"
 
 apt_install \
-	ros-jazzy-cartographer \
-	ros-jazzy-cartographer-ros \
 	ros-jazzy-cv-bridge \
 	ros-jazzy-robot-localization \
-	ros-jazzy-ros-gz \
+	ros-jazzy-sdformat-urdf \
 	ros-jazzy-slam-toolbox \
 	ros-jazzy-ublox-gps \
 	ros-jazzy-usb-cam \
@@ -19,7 +17,9 @@ apt_install \
 
 run_as_mechaship_user "
 set -e
-source ~/ros2_setup.bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/uros_ws/install/local_setup.bash
 rm -rf ~/YDLidar-SDK
 git clone https://github.com/YDLIDAR/YDLidar-SDK ~/YDLidar-SDK
 cd ~/YDLidar-SDK
@@ -31,6 +31,8 @@ sudo make install
 rm -rf ~/ros2_ws/src/mechaship
 git clone --recurse-submodules -b '${MECHASHIP_REPO_BRANCH}' --depth=1 --shallow-submodules https://github.com/mechasolution/mechaship.git ~/ros2_ws/src/mechaship
 cd ~/ros2_ws
-rosdep install --from-paths src --ignore-src -y --skip-keys=ros_wit_imu_node
+rosdep install --from-paths src --ignore-src -y \
+	--skip-keys=micro_ros_agent \
+	--skip-keys=ros_wit_imu_node
 colcon build --symlink-install
 "

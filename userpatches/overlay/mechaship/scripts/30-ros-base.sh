@@ -24,14 +24,11 @@ if [[ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]]; then
 fi
 run_as_mechaship_user "rosdep update"
 
-cat > "/home/${MECHASHIP_USER}/ros2_setup.bash" <<'EOF'
+cat >> "/home/${MECHASHIP_USER}/.bashrc" <<'EOF'
 source /opt/ros/jazzy/setup.bash
-[ -f ~/ros2_ws/install/setup.bash ] && source ~/ros2_ws/install/setup.bash
-[ -f ~/uros_ws/install/local_setup.bash ] && source ~/uros_ws/install/local_setup.bash
-
-alias cb="cd ~/ros2_ws && colcon build --symlink-install && source ~/ros2_ws/install/local_setup.bash"
+alias cb='cd ~/ros2_ws && colcon build --symlink-install && source ~/ros2_ws/install/local_setup.bash'
+source ~/ros2_ws/install/setup.bash
+export ROS_DOMAIN_ID=0
 EOF
 
-chown "${MECHASHIP_USER}:${MECHASHIP_USER}" "/home/${MECHASHIP_USER}/ros2_setup.bash"
-ensure_source_line "source ~/ros2_setup.bash" "/home/${MECHASHIP_USER}/.bashrc"
 chown "${MECHASHIP_USER}:${MECHASHIP_USER}" "/home/${MECHASHIP_USER}/.bashrc"

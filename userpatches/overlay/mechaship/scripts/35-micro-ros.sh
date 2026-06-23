@@ -4,7 +4,8 @@ source /tmp/overlay/mechaship/scripts/common.sh
 
 run_as_mechaship_user '
 set -e
-source ~/ros2_setup.bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
 rm -rf ~/uros_ws
 mkdir -p ~/uros_ws/src
 cd ~/uros_ws
