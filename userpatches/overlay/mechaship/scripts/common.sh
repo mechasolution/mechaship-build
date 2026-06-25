@@ -14,9 +14,9 @@ export LC_ALL=C
 : "${MECHASHIP_LOCAL_MIRROR_IP:=}"
 : "${MECHASHIP_LOCAL_MIRROR_HOSTS:=krr.ports.ubuntu.com krr.ppa.launchpad.net krr.packages.ros.org}"
 : "${MECHASHIP_ROS_APT_URI:=http://krr.packages.ros.org/ros2/ubuntu}"
-: "${MECHASHIP_VARIANT:=uipa}"
+: "${MECHASHIP_VARIANT:=v26.01b}"
 
-if [[ ! "${MECHASHIP_VARIANT}" =~ ^[a-z0-9_-]+$ ]]; then
+if [[ ! "${MECHASHIP_VARIANT}" =~ ^[a-z0-9_-]+(\.[a-z0-9_-]+)*$ ]]; then
 	echo "Invalid MECHASHIP_VARIANT=${MECHASHIP_VARIANT}" >&2
 	exit 1
 fi
