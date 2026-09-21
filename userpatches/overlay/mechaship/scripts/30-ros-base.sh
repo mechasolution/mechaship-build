@@ -12,7 +12,7 @@ cat > /etc/apt/sources.list.d/ros2.list <<EOF
 deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] ${MECHASHIP_ROS_APT_URI} $(. /etc/os-release && echo "${UBUNTU_CODENAME}") main
 EOF
 
-apt-get update
+apt_update
 apt_install ros-jazzy-ros-base ros-dev-tools python3-pip
 python3 -m pip config set global.break-system-packages true
 run_as_mechaship_user "python3 -m pip config set global.break-system-packages true"

@@ -15,6 +15,7 @@ export LC_ALL=C
 : "${MECHASHIP_LOCAL_MIRROR_HOSTS:=krr.ports.ubuntu.com krr.ppa.launchpad.net krr.packages.ros.org}"
 : "${MECHASHIP_ROS_APT_URI:=http://krr.packages.ros.org/ros2/ubuntu}"
 : "${MECHASHIP_VARIANT:=v26.01b}"
+: "${MECHASHIP_BUILD_JOBS:=2}"
 
 if [[ ! "${MECHASHIP_VARIANT}" =~ ^[a-z0-9_-]+(\.[a-z0-9_-]+)*$ ]]; then
 	echo "Invalid MECHASHIP_VARIANT=${MECHASHIP_VARIANT}" >&2
@@ -33,14 +34,32 @@ source "${variant_config}"
 
 : "${MECHASHIP_UDEV_RULE:?MECHASHIP_UDEV_RULE is required}"
 : "${MECHASHIP_REPO_BRANCH:?MECHASHIP_REPO_BRANCH is required}"
+: "${MECHASHIP_BOARD:?MECHASHIP_BOARD is required}"
+: "${MECHASHIP_NETPLAN_FILE:?MECHASHIP_NETPLAN_FILE is required}"
 
-export MECHASHIP_VARIANT MECHASHIP_UDEV_RULE MECHASHIP_REPO_BRANCH
+if [[ "${BOARD:-}" != "${MECHASHIP_BOARD}" ]]; then
+	echo "MECHASHIP_VARIANT=${MECHASHIP_VARIANT} requires BOARD=${MECHASHIP_BOARD}, got BOARD=${BOARD:-unset}" >&2
+	exit 1
+fi
+
+export MECHASHIP_VARIANT MECHASHIP_UDEV_RULE MECHASHIP_REPO_BRANCH MECHASHIP_BOARD MECHASHIP_NETPLAN_FILE
 
 apt_install() {
 	apt-get install -y \
 		-o Dpkg::Options::=--force-confdef \
 		-o Dpkg::Options::=--force-confold \
 		"$@"
+}
+
+apt_update() {
+	if apt-get update -o APT::Update::Error-Mode=any; then
+		return 0
+	fi
+
+	echo "Internal APT mirror unavailable; retrying with public mirrors" >&2
+	use_public_apt_mirrors
+	remove_local_mirror_hosts
+	apt-get update -o APT::Update::Error-Mode=any
 }
 
 run_as_mechaship_user() {

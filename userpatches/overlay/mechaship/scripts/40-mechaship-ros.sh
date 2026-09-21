@@ -26,7 +26,7 @@ cd ~/YDLidar-SDK
 mkdir -p build
 cd build
 cmake ..
-make -j\$(nproc)
+make -j${MECHASHIP_BUILD_JOBS}
 sudo make install
 rm -rf ~/ros2_ws/src/mechaship
 git clone --recurse-submodules -b '${MECHASHIP_REPO_BRANCH}' --depth=1 --shallow-submodules https://github.com/mechasolution/mechaship.git ~/ros2_ws/src/mechaship
@@ -34,5 +34,7 @@ cd ~/ros2_ws
 rosdep install --from-paths src --ignore-src -y \
 	--skip-keys=micro_ros_agent \
 	--skip-keys=ros_wit_imu_node
-colcon build --symlink-install
+CMAKE_BUILD_PARALLEL_LEVEL=${MECHASHIP_BUILD_JOBS} \
+	MAKEFLAGS=-j${MECHASHIP_BUILD_JOBS} \
+	colcon build --symlink-install --executor sequential
 "

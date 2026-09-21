@@ -10,7 +10,7 @@ fi
 
 use_internal_apt_mirrors
 
-apt-get update
+apt_update
 apt_install \
 	adduser \
 	build-essential \

@@ -50,15 +50,29 @@ DISTRIB_CODENAME=noble
 DISTRIB_DESCRIPTION="${mechaship_pretty_name}"
 EOF
 
-if [[ "${BOARD:-}" != "rock-5a" ]]; then
-	echo "Skipping Rock 5A cooling fan device tree customization for BOARD=${BOARD:-unknown}"
-	exit 0
-fi
+case "${BOARD:-}" in
+	rock-5a)
+		fan_board_name="Rock 5A"
+		fan_compatible="radxa,rock-5a"
+		fan_dtb_name="rk3588s-rock-5a.dtb"
+		fan_adjust_map5=yes
+		;;
+	rock-5c)
+		fan_board_name="Rock 5C"
+		fan_compatible="radxa,rock-5c"
+		fan_dtb_name="rk3588s-rock-5c.dtb"
+		fan_adjust_map5=no
+		;;
+	*)
+		echo "Skipping MechaShip cooling fan device tree customization for BOARD=${BOARD:-unknown}"
+		exit 0
+		;;
+esac
 
 apt_install device-tree-compiler
 
-overlay_dts="/tmp/mechaship-rock5a-fan.dts"
-overlay_dtbo="/tmp/mechaship-rock5a-fan.dtbo"
+overlay_dts="/tmp/mechaship-${BOARD}-fan.dts"
+overlay_dtbo="/tmp/mechaship-${BOARD}-fan.dtbo"
 
 cleanup_device_tree_files() {
 	rm -f "${overlay_dts}" "${overlay_dtbo}"
@@ -66,12 +80,12 @@ cleanup_device_tree_files() {
 
 trap cleanup_device_tree_files EXIT
 
-cat > "${overlay_dts}" <<'EOF'
+cat > "${overlay_dts}" <<EOF
 /dts-v1/;
 /plugin/;
 
 / {
-	compatible = "rockchip,rk3588s";
+	compatible = "${fan_compatible}";
 
 	fragment@0 {
 		target = <&pwm15>;
@@ -89,7 +103,10 @@ cat > "${overlay_dts}" <<'EOF'
 			pwms = <&pwm15 0 10000 0>;
 		};
 	};
+EOF
 
+if [[ "${fan_adjust_map5}" == "yes" ]]; then
+	cat >> "${overlay_dts}" <<'EOF'
 	/* Six cooling levels have valid state indexes 0 through 5. */
 	fragment@2 {
 		target = <&soc_thermal>;
@@ -101,19 +118,23 @@ cat > "${overlay_dts}" <<'EOF'
 			};
 		};
 	};
+EOF
+fi
+
+cat >> "${overlay_dts}" <<'EOF'
 };
 EOF
 
 dtc -@ -I dts -O dtb "${overlay_dts}" -o "${overlay_dtbo}"
 
-mapfile -t rock5a_dtbs < <(find /boot -type f -path '*/rockchip/rk3588s-rock-5a.dtb' | sort)
+mapfile -t fan_dtbs < <(find /boot -type f -path "*/rockchip/${fan_dtb_name}" | sort)
 
-if [[ "${#rock5a_dtbs[@]}" -eq 0 ]]; then
-	echo "No rk3588s-rock-5a.dtb found under /boot" >&2
+if [[ "${#fan_dtbs[@]}" -eq 0 ]]; then
+	echo "No ${fan_dtb_name} found under /boot" >&2
 	exit 1
 fi
 
-for dtb in "${rock5a_dtbs[@]}"; do
+for dtb in "${fan_dtbs[@]}"; do
 	backup="${dtb}.mechaship-orig"
 	patched="${dtb}.mechaship-new"
 
@@ -126,5 +147,5 @@ for dtb in "${rock5a_dtbs[@]}"; do
 	chown --reference="${dtb}" "${patched}"
 	touch --reference="${dtb}" "${patched}"
 	mv -f "${patched}" "${dtb}"
-	echo "Applied MechaShip Rock 5A cooling fan overlay to ${dtb}"
+	echo "Applied MechaShip ${fan_board_name} cooling fan overlay to ${dtb}"
 done

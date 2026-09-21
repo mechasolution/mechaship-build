@@ -49,10 +49,18 @@ TTYVTDisallocate=yes
 ExecStartPre=-/usr/local/sbin/mechaship-clear-console %I
 EOF
 
-if [[ -d "${MECHASHIP_OVERLAY}/files/netplan" ]]; then
-	install -d -m 0755 /etc/netplan
-	cp -a "${MECHASHIP_OVERLAY}/files/netplan/." /etc/netplan/
+netplan_source="${MECHASHIP_OVERLAY}/files/netplan/${MECHASHIP_NETPLAN_FILE}"
+
+if [[ ! -f "${netplan_source}" ]]; then
+	echo "Missing MechaShip netplan configuration: ${netplan_source}" >&2
+	exit 1
 fi
+
+install -D -m 0600 "${netplan_source}" "/etc/netplan/${MECHASHIP_NETPLAN_FILE}"
+
+install -D -m 0755 \
+	"${MECHASHIP_OVERLAY}/files/bin/mechaship-rock5c-selftest" \
+	/usr/local/bin/mechaship-rock5c-selftest
 
 if [[ -d /etc/cloud/cloud.cfg.d ]]; then
 	cat > /etc/cloud/cloud.cfg.d/91-disable-default-user.cfg <<'EOF'
@@ -64,7 +72,7 @@ fi
 
 rm -f /root/.not_logged_in_yet
 
-apt_install libcap2-bin openssh-server
+apt_install gdisk libcap2-bin openssh-server
 
 install -d -m 0755 /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/90-mechaship-password-auth.conf <<'EOF'
@@ -138,6 +146,68 @@ WantedBy=sysinit.target
 EOF
 
 systemctl enable mechaship-firstboot-hostname.service
+
+# A raw image written to a larger SD card retains its original backup GPT
+# header location.  Armbian expands the root partition on the first boot, but
+# fdisk does not relocate that backup header.  Repair it immediately after the
+# resize service so every later boot sees a consistent GPT.
+cat > /usr/local/sbin/mechaship-repair-gpt <<'EOF'
+#!/bin/bash
+
+set -euo pipefail
+
+state_dir="/var/lib/mechaship"
+state_file="${state_dir}/gpt-repaired"
+service_name="mechaship-repair-gpt.service"
+
+if [[ -e "${state_file}" ]]; then
+	systemctl disable "${service_name}" >/dev/null 2>&1 || true
+	exit 0
+fi
+
+root_device="$(findmnt -n -o SOURCE / | sed 's~\[.*\]~~')"
+disk_name="$(lsblk -n -o PKNAME "${root_device}" | head -n1)"
+
+if [[ -z "${disk_name}" || ! -b "/dev/${disk_name}" ]]; then
+	echo "Unable to resolve root disk from ${root_device}" >&2
+	exit 1
+fi
+
+disk_device="/dev/${disk_name}"
+sgdisk -e "${disk_device}"
+partprobe "${disk_device}" || true
+
+verification="$(sgdisk -v "${disk_device}" 2>&1 || true)"
+if [[ "${verification}" != *'No problems found.'* ]]; then
+	echo "GPT verification failed for ${disk_device}" >&2
+	echo "${verification}" >&2
+	exit 1
+fi
+
+install -d -m 0755 "${state_dir}"
+touch "${state_file}"
+systemctl disable "${service_name}" >/dev/null 2>&1 || true
+EOF
+chmod 0755 /usr/local/sbin/mechaship-repair-gpt
+
+cat > /etc/systemd/system/mechaship-repair-gpt.service <<'EOF'
+[Unit]
+Description=Repair backup GPT header after first-boot root expansion
+DefaultDependencies=no
+After=local-fs.target armbian-resize-filesystem.service
+Before=basic.target
+ConditionPathExists=!/var/lib/mechaship/gpt-repaired
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mechaship-repair-gpt
+TimeoutStartSec=2min
+
+[Install]
+WantedBy=basic.target
+EOF
+
+systemctl enable mechaship-repair-gpt.service
 
 if [[ -x /usr/bin/ping ]]; then
 	setcap cap_net_raw+ep /usr/bin/ping || true

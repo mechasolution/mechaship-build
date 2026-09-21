@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+
+# Runtime validation for the MechaShip v26.09b Rock 5C image.
+# Run on the target after the first boot:
+#   mechaship-rock5c-selftest
+
+set -uo pipefail
+
+strict=no
+failures=0
+warnings=0
+
+if [[ -t 1 ]]; then
+	green=$'\033[1;32m'
+	yellow=$'\033[1;33m'
+	red=$'\033[1;31m'
+	blue=$'\033[1;34m'
+	reset=$'\033[0m'
+else
+	green=""
+	yellow=""
+	red=""
+	blue=""
+	reset=""
+fi
+
+usage() {
+	cat <<'USAGE'
+Usage: mechaship-rock5c-selftest [--strict]
+
+Validates the Rock 5C board identity, SD GPT integrity, boot DTB, AIC8800
+Wi-Fi, fan thermal policy, MechaShip services, ROS workspaces, and attached
+MechaShip devices.
+
+--strict  Treat observation-required checks (for example no attached MCU or
+          LiDAR) as failures. The default reports them as WARN.
+USAGE
+}
+
+pass() {
+	printf '%sPASS%s  %s\n' "${green}" "${reset}" "$*"
+}
+
+warn() {
+	warnings=$((warnings + 1))
+	printf '%sWARN%s  %s\n' "${yellow}" "${reset}" "$*"
+}
+
+fail() {
+	failures=$((failures + 1))
+	printf '%sFAIL%s  %s\n' "${red}" "${reset}" "$*"
+}
+
+observe() {
+	if [[ "${strict}" == yes ]]; then
+		fail "$*"
+	else
+		warn "$*"
+	fi
+}
+
+section() {
+	printf '\n%s[%s]%s\n' "${blue}" "$*" "${reset}"
+}
+
+has_command() {
+	command -v "$1" >/dev/null 2>&1
+}
+
+read_dt_string() {
+	local property="$1"
+	local path="/proc/device-tree/${property}"
+
+	[[ -r "${path}" ]] || return 1
+	tr -d '\0' < "${path}"
+}
+
+find_rock5c_dtb() {
+	local kernel_dtb
+
+	kernel_dtb="/boot/dtb-$(uname -r)/rockchip/rk3588s-rock-5c.dtb"
+	if [[ -f "${kernel_dtb}" ]]; then
+		printf '%s\n' "${kernel_dtb}"
+		return 0
+	fi
+
+	find /boot -type f -path '*/rockchip/rk3588s-rock-5c.dtb' -print -quit 2>/dev/null
+}
+
+check_board() {
+	local model compatible
+
+	section 'board and boot device tree'
+	model="$(read_dt_string model 2>/dev/null || true)"
+	compatible="$(read_dt_string compatible 2>/dev/null || true)"
+
+	if [[ "${model}" == *'Rock 5C'* || "${compatible}" == *'rock-5c'* ]]; then
+		pass "Rock 5C detected (${model:-compatible=${compatible}})"
+	else
+		fail "Rock 5C was not detected (model=${model:-unavailable}, compatible=${compatible:-unavailable})"
+	fi
+
+	if [[ "$(uname -m)" == aarch64 ]]; then
+		pass "architecture is aarch64"
+	else
+		fail "expected aarch64, got $(uname -m)"
+	fi
+}
+
+check_storage() {
+	local root_device disk_name disk_device report
+
+	section 'SD partition table'
+	root_device="$(findmnt -n -o SOURCE / 2>/dev/null | sed 's~\[.*\]~~')"
+	disk_name="$(lsblk -n -o PKNAME "${root_device}" 2>/dev/null | head -n1)"
+	disk_device="/dev/${disk_name}"
+
+	if [[ -z "${disk_name}" || ! -b "${disk_device}" ]]; then
+		fail "could not resolve the root disk from ${root_device:-unknown}"
+		return
+	fi
+
+	if ! has_command sgdisk; then
+		fail 'sgdisk is missing; cannot validate GPT integrity'
+		return
+	fi
+
+	report="$(sgdisk -v "${disk_device}" 2>&1 || true)"
+	if [[ "${report}" == *'No problems found.'* ]]; then
+		pass "GPT backup header is valid on ${disk_device}"
+	else
+		fail "GPT verification failed on ${disk_device}: ${report//$'\n'/; }"
+	fi
+}
+
+check_fan() {
+	local dtb thermal_found=no type state max_state temp raw_temp
+
+	section 'cooling fan and thermal policy'
+	dtb="$(find_rock5c_dtb)"
+	if [[ -n "${dtb}" ]]; then
+		pass "Rock 5C boot DTB present: ${dtb}"
+	else
+		fail 'rk3588s-rock-5c.dtb is missing under /boot'
+		return
+	fi
+
+	# Do not use grep -q here: with pipefail it can close the pipe early and
+	# make strings report SIGPIPE, producing a false failure.
+	if has_command strings && strings "${dtb}" 2>/dev/null | grep -Fx 'pwm-fan' >/dev/null; then
+		pass 'DTB contains the pwm-fan node'
+	else
+		fail 'DTB does not expose a pwm-fan node'
+	fi
+
+	for device in /sys/class/thermal/cooling_device*; do
+		[[ -r "${device}/type" ]] || continue
+		type="$(<"${device}/type")"
+		if [[ "${type}" == *'pwm-fan'* ]]; then
+			state="$(cat "${device}/cur_state" 2>/dev/null || printf '?')"
+			max_state="$(cat "${device}/max_state" 2>/dev/null || printf '?')"
+			pass "thermal ${type}: current state=${state}, maximum state=${max_state}"
+			thermal_found=yes
+		fi
+	done
+	[[ "${thermal_found}" == yes ]] || fail 'no pwm-fan cooling device is registered'
+
+	for zone in /sys/class/thermal/thermal_zone*; do
+		[[ -r "${zone}/temp" ]] || continue
+		raw_temp="$(<"${zone}/temp")"
+		temp="$(awk -v value="${raw_temp}" 'BEGIN { printf "%.1f", value / 1000 }')"
+		printf 'INFO  %s: %s°C\n' "$(<"${zone}/type" 2>/dev/null || basename "${zone}")" "${temp}"
+	done
+}
+
+check_wifi() {
+	local module state rfkill_state firmware_dir
+
+	section 'on-board AIC8800 Wi-Fi'
+	for module in aic_load_fw_usb aic8800_fdrv_usb aic_btusb_usb; do
+		if has_command modinfo && modinfo "${module}" >/dev/null 2>&1; then
+			pass "kernel module installed: ${module}"
+		else
+			fail "kernel module missing: ${module}"
+		fi
+	done
+
+	firmware_dir="$(find /lib/firmware -maxdepth 2 -type d -iname '*aic8800*' -print -quit 2>/dev/null || true)"
+	[[ -n "${firmware_dir}" ]] && pass "AIC8800 firmware present: ${firmware_dir}" || fail 'AIC8800 firmware is missing'
+
+	if [[ -e /sys/class/net/wlan0 ]]; then
+		pass 'Wi-Fi interface is named wlan0'
+	else
+		fail 'wlan0 is absent; check AIC8800 USB enumeration and dmesg'
+		return
+	fi
+
+	if has_command nmcli; then
+		state="$(nmcli -g GENERAL.STATE device show wlan0 2>/dev/null || true)"
+		if [[ -n "${state}" ]]; then
+			pass "NetworkManager wlan0 state: ${state}"
+		else
+			warn 'NetworkManager could not query wlan0'
+		fi
+	fi
+
+	if has_command rfkill; then
+		rfkill_state="$(rfkill list wlan 2>/dev/null || true)"
+		if [[ -z "${rfkill_state}" ]]; then
+			warn 'rfkill could not find a Wi-Fi radio'
+		elif [[ "${rfkill_state}" == *'Hard blocked: yes'* ]]; then
+			fail 'Wi-Fi is hard blocked'
+		elif [[ "${rfkill_state}" == *'Soft blocked: yes'* ]]; then
+			fail 'Wi-Fi is soft blocked'
+		else
+			pass 'Wi-Fi is not rfkill-blocked'
+		fi
+	fi
+}
+
+check_mechaship() {
+	local service target_home setup_file found_devices=0
+
+	section 'MechaShip runtime'
+	if [[ -f /etc/udev/rules.d/98-mechaship-v26.09b.rules ]]; then
+		pass 'v26.09b udev rules installed'
+	else
+		fail 'v26.09b udev rules are missing'
+	fi
+
+	for service in mechaship_system.service mechaship_power_off.service; do
+		if systemctl is-enabled --quiet "${service}"; then
+			pass "${service} is enabled"
+		else
+			fail "${service} is not enabled"
+		fi
+	done
+
+	if systemctl is-active --quiet mechaship_system.service; then
+		pass 'mechaship_system.service is active'
+	else
+		observe 'mechaship_system.service is not active; attach the MCU and inspect systemctl status'
+	fi
+
+	for device in /dev/ttyUROS /dev/ttyMCU /dev/ttyGPS /dev/ttyLiDAR /dev/ttyIMU /dev/videoRGBCAMERA0; do
+		if [[ -e "${device}" ]]; then
+			pass "detected ${device} -> $(readlink -f "${device}")"
+			found_devices=$((found_devices + 1))
+		fi
+	done
+	[[ "${found_devices}" -gt 0 ]] || observe 'no optional MechaShip peripheral is attached'
+
+	target_home="/home/${SUDO_USER:-${USER:-ubuntu}}"
+	[[ -d "${target_home}" ]] || target_home='/home/ubuntu'
+	setup_file="${target_home}/ros2_ws/install/setup.bash"
+	if [[ -f /opt/ros/jazzy/setup.bash && -f "${setup_file}" ]]; then
+		if bash -c "source /opt/ros/jazzy/setup.bash && source '${setup_file}' && ros2 pkg prefix mechaship_bringup >/dev/null"; then
+			pass 'ROS Jazzy and mechaship_bringup workspace are usable'
+		else
+			fail 'ROS workspace cannot resolve mechaship_bringup'
+		fi
+	else
+		fail 'ROS Jazzy or the MechaShip workspace setup file is missing'
+	fi
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--strict)
+			strict=yes
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+		*)
+			printf 'Unknown option: %s\n' "$1" >&2
+			usage >&2
+			exit 2
+			;;
+	esac
+	shift
+done
+
+check_board
+check_storage
+check_fan
+check_wifi
+check_mechaship
+
+printf '\nResult: %d failure(s), %d warning(s)\n' "${failures}" "${warnings}"
+[[ "${failures}" -eq 0 ]]

@@ -28,7 +28,7 @@ customize_image() {
 	display_alert "Calling image customization script" "customize-image.sh" "info"
 
 	set +e # disable error control
-	chroot_sdcard /tmp/customize-image.sh "${RELEASE}" "$LINUXFAMILY" "$BOARD" "$BUILD_DESKTOP" "$ARCH"
+	chroot_sdcard /tmp/customize-image.sh "${RELEASE}" "$LINUXFAMILY" "$BOARD" "$BUILD_DESKTOP" "$ARCH" "${MECHASHIP_VARIANT:-v26.01b}"
 	CUSTOMIZE_IMAGE_RC=$?
 	set -e # back to normal error control
 
